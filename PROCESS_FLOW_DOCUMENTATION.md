@@ -157,10 +157,14 @@ Each class file has a `TemplateClass` with a `process()` method that contains al
 ### Simple Flow
 1. Excel file comes in
 2. System checks MDMS config to find which class to use
-3. That Java class processes the entire file
+3. For each sheet:
+   - If `parseEnabled = true` → Insert rows into `eg_ex_in_sheet_data_temp` table
+   - If `parseEnabled = false` → Only validate, no database insertion
+4. Send processing results to `processingResultTopic` via Kafka
+5. Other services can consume results from Kafka for further processing
 
 ### Configuration Example (in MDMS)
-```java
+```json
 // In Excel Ingestion Java Service
 // MDMS stores complete processor configuration
 // Example MDMS configuration structure:
@@ -169,25 +173,47 @@ Each class file has a `TemplateClass` with a `process()` method that contains al
     "moduleDetails": [{
         "moduleName": "HCM-ADMIN-CONSOLE",
         "masterDetails": [{
-            "name": "processorConfig",
+            "name": "excelIngestionProcess",
             "data": {
-                "user": {
-                    "processorClass": "org.egov.processor.UserProcessor",
-                    "validationClass": "org.egov.validator.UserValidator"
-                },
-                "facility": {
-                    "processorClass": "org.egov.processor.FacilityProcessor",
-                    "validationClass": "org.egov.validator.FacilityValidator"
+                "microplan-ingestion": {
+                    "processingResultTopic": "hcm-microplan-processing-result",
+                    "sheets": [
+                        {
+                            "sheetName": "HCM_ADMIN_CONSOLE_USER_LIST",
+                            "processorClass": "UserProcessor",
+                            "parseEnabled": true  // Controls data parsing/processing
+                        },
+                        {
+                            "sheetName": "HCM_ADMIN_CONSOLE_FACILITIES",
+                            "processorClass": "FacilityProcessor", 
+                            "parseEnabled": false  // Skip data processing, only validate
+                        }
+                    ]
                 }
             }
         }]
     }]
 }
-
-// Java code reads MDMS config to decide which class to use
-String processorClassName = mdmsConfig.get(type).get("processorClass");
-Class<?> processorClass = Class.forName(processorClassName);
 ```
+
+### Key Configuration Properties:
+
+#### **parseEnabled**
+- **true**: Parse data row by row and insert into temp table (default)
+- **false**: Only validate sheet structure, no database insertion
+- **Parse means**: Insert Excel rows into `eg_ex_in_sheet_data_temp` table
+
+#### **processingResultTopic**
+- Kafka topic where processing results are published
+- Used for async communication with other services
+- Contains success/failure status and processed data details
+
+### Java Implementation:
+- Reads MDMS config to get processor class name
+- Then process the sheet data according to  processor class
+- If `parseEnabled = true` → Insert rows to `eg_ex_in_sheet_data_temp` table
+- If `parseEnabled = false` → Process but no DB insertion
+- Send results to configured Kafka topic
 
 **Key Difference**: Excel Ingestion is a Java service that reads processor class names from MDMS configuration, not from code files.
 
